@@ -1,0 +1,68 @@
+stages:
+  - build
+  - deploy
+
+### BUILD ###
+.build:
+  image: node:14.1-alpine
+  stage: build
+  script:
+    - echo -e "$ENV" > .env
+    - npm i
+    - npm run build
+  artifacts:
+    paths:
+      - build
+    when: on_success
+    expire_in: 1d
+
+build:dev:
+  extends: .build
+  variables:
+    ENV: $ENV_DEV
+  only:
+    refs:
+      - develop
+
+build:prod:
+  extends: .build
+  variables:
+    ENV: $ENV_PROD
+  only:
+    refs:
+      - master
+
+### DEPLOY ###
+.deploy:
+  stage: deploy
+  image: dinofizz/rsync-ssh
+  script:
+    - cd build
+    - mkdir -p ~/.ssh
+    - echo -e "$SSH_PRIVATE_KEY" > ~/.ssh/id_rsa
+    - chmod 600 ~/.ssh/id_rsa
+
+    - ssh -o StrictHostKeyChecking=no $SSH_USER@$SERVER_HOST "mkdir -p $PROJECT_ROOT"
+    - rsync -az --no-perms --no-owner --no-group --delete-during -e "ssh -o StrictHostKeyChecking=no" . $SSH_USER@$SERVER_HOST:$PROJECT_ROOT
+
+deploy:dev:
+  extends: .deploy
+  variables:
+    PROJECT_ROOT: /var/www/html
+    SSH_PRIVATE_KEY: $SSH_PRIVATE_KEY_DEV
+    SSH_USER: $SSH_USER_DEV
+    SERVER_HOST: $SERVER_HOST_DEV
+  only:
+    refs:
+      - develop
+
+deploy:prod:
+  stage: deploy
+  image: python:latest
+  script:
+    - pip install awscli
+    - aws s3 sync build/ s3://livemysteps-web-app
+    - aws cloudfront create-invalidation --distribution-id=$AWS_CLOUDFRONT_DISTRIBUTION_ID --paths /
+  only:
+    refs:
+      - master
